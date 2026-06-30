@@ -6,4 +6,3 @@ def call(Map options) {
 
     echo "Test execution simulated ✅"
 }
-``
