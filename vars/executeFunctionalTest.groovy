@@ -1,8 +1,9 @@
-def call(Map options) {
-    echo "Running Test Pack..."
-    echo "Node: ${options.node}"
-    echo "Credential: ${options.credentialId}"
-    echo "Test Pack ID: ${options.TEST_PACK_ID}"
+@Library('shared-pipeline@main') _
 
-    echo "Test execution simulated ?"
-}
+executeFunctionalTest(
+    credentialId: 'watermelon',
+    packId: 9024760,
+    environmentId: 8890901,
+    buildId: 8902051,
+    webAutId: 9049052
+)
