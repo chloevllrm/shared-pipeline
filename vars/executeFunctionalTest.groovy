@@ -1,9 +1,27 @@
-@Library('shared-pipeline@main') _
+def call(Map options) {
 
-executeFunctionalTest(
-    credentialId: 'watermelon',
-    packId: 9024760,
-    environmentId: 8890901,
-    buildId: 8902051,
-    webAutId: 9049052
-)
+    withCredentials([
+        usernamePassword(
+            credentialsId: options.credentialId,
+            usernameVariable: 'WM_USERNAME',
+            passwordVariable: 'WM_PASSWORD'
+        )
+    ]) {
+
+        powershell '''
+        $tokenResponse = Invoke-RestMethod `
+          -Method POST `
+          -Uri "https://wm-sandbox-auth-1.watermelon.us/realms/watermelon/protocol/openid-connect/token" `
+          -ContentType "application/x-www-form-urlencoded" `
+          -Body @{
+            client_id="web_app"
+            username=$env:WM_USERNAME
+            password=$env:WM_PASSWORD
+            grant_type="password"
+          }
+
+        Write-Host "TOKEN RECEIVED"
+        Write-Host $tokenResponse.access_token.Substring(0,20)
+        '''
+    }
+}
