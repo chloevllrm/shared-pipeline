@@ -1,0 +1,98 @@
+name: Watermelon Test Execution
+
+on:
+  workflow_dispatch:
+
+jobs:
+  execute-tests:
+
+    runs-on: windows-latest
+
+    env:
+      WM_USERNAME: ${{ secrets.WM_USERNAME }}
+      WM_PASSWORD: ${{ secrets.WM_PASSWORD }}
+
+      AUTH_PROVIDER_URL: "https://wm-sandbox-auth-1.watermelon.us/realms/watermelon/protocol/openid-connect/token"
+
+      EXECUTE_API_URL: "https://wm-sandbox-1.watermelon.us/services/wmuitestcontroller/api/test-packs/execute_v2"
+
+      STATUS_API_URL: "https://wm-sandbox-1.watermelon.us/services/wmuitestcontroller/api/test-runs"
+
+      PACK_ID: "9024760"
+      ENVIRONMENT_ID: "8890901"
+      BUILD_ID: "8902051"
+      WEB_AUT_ID: "9049052"
+
+      POLL_INTERVAL: 10
+
+    steps:
+
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Authenticate
+        id: auth
+        run: |
+
+          TOKEN=$(curl -s -X POST "$AUTH_PROVIDER_URL" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "client_id=web_app" \
+            -d "username=$WM_USERNAME" \
+            -d "password=$WM_PASSWORD" \
+            -d "grant_type=password" \
+            | jq -r '.access_token')
+
+          echo "wm_token=$TOKEN" >> $GITHUB_OUTPUT
+
+      - name: Execute Test Pack
+        id: execute
+        run: |
+
+          RESPONSE=$(curl -s -X PUT "$EXECUTE_API_URL" \
+            -H "Authorization: Bearer ${{ steps.auth.outputs.wm_token }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "packId": 9024760,
+              "runNow": true,
+              "environmentId": 8890901,
+              "buildId": 8902051,
+              "iteration": 1,
+              "headlessExecution": false,
+              "webAutId": 9049052
+            }')
+
+          echo "$RESPONSE"
+
+          RUN_ID=$(echo "$RESPONSE" | jq -r '.id')
+
+          echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
+
+      - name: Monitor Execution
+        run: |
+
+          RUN_ID=${{ steps.execute.outputs.run_id }}
+
+          while true
+          do
+
+            RESPONSE=$(curl -s -X GET "$STATUS_API_URL/$RUN_ID" \
+              -H "Authorization: Bearer ${{ steps.auth.outputs.wm_token }}")
+
+            STATE=$(echo "$RESPONSE" | jq -r '.state')
+            STATUS=$(echo "$RESPONSE" | jq -r '.status')
+
+            echo "STATE=$STATE"
+            echo "STATUS=$STATUS"
+
+            if [ "$STATE" = "COMPLETED" ]; then
+
+              if [ "$STATUS" = "FAIL" ]; then
+                exit 1
+              fi
+
+              exit 0
+            fi
+
+            sleep $POLL_INTERVAL
+
+          done
