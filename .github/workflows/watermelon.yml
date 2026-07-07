@@ -4,26 +4,26 @@ on:
   workflow_dispatch:
 
 jobs:
+
   execute-tests:
 
     runs-on: windows-latest
 
     env:
+
       WM_USERNAME: ${{ secrets.WM_USERNAME }}
       WM_PASSWORD: ${{ secrets.WM_PASSWORD }}
 
-      AUTH_PROVIDER_URL: "https://wm-sandbox-auth-1.watermelon.us/realms/watermelon/protocol/openid-connect/token"
+      AUTH_PROVIDER_URL: https://wm-sandbox-auth-1.watermelon.us/realms/watermelon/protocol/openid-connect/token
 
-      EXECUTE_API_URL: "https://wm-sandbox-1.watermelon.us/services/wmuitestcontroller/api/test-packs/execute_v2"
+      EXECUTE_API_URL: https://wm-sandbox-1.watermelon.us/services/wmuitestcontroller/api/test-packs/execute_v2
 
-      STATUS_API_URL: "https://wm-sandbox-1.watermelon.us/services/wmuitestcontroller/api/test-runs"
+      STATUS_API_URL: https://wm-sandbox-1.watermelon.us/services/wmuitestcontroller/api/test-runs
 
       PACK_ID: "9024760"
       ENVIRONMENT_ID: "8890901"
       BUILD_ID: "8902051"
       WEB_AUT_ID: "9049052"
-
-      POLL_INTERVAL: 10
 
     steps:
 
@@ -32,67 +32,79 @@ jobs:
 
       - name: Authenticate
         id: auth
+        shell: pwsh
         run: |
 
-          TOKEN=$(curl -s -X POST "$AUTH_PROVIDER_URL" \
-            -H "Content-Type: application/x-www-form-urlencoded" \
-            -d "client_id=web_app" \
-            -d "username=$WM_USERNAME" \
-            -d "password=$WM_PASSWORD" \
-            -d "grant_type=password" \
-            | jq -r '.access_token')
+          $body = @{
+            client_id  = "web_app"
+            username   = $env:WM_USERNAME
+            password   = $env:WM_PASSWORD
+            grant_type = "password"
+          }
 
-          echo "wm_token=$TOKEN" >> $GITHUB_OUTPUT
+          $response = Invoke-RestMethod `
+            -Method POST `
+            -Uri $env:AUTH_PROVIDER_URL `
+            -ContentType "application/x-www-form-urlencoded" `
+            -Body $body
+
+          echo "wm_token=$($response.access_token)" >> $env:GITHUB_OUTPUT
 
       - name: Execute Test Pack
         id: execute
+        shell: pwsh
         run: |
 
-          RESPONSE=$(curl -s -X PUT "$EXECUTE_API_URL" \
-            -H "Authorization: Bearer ${{ steps.auth.outputs.wm_token }}" \
-            -H "Content-Type: application/json" \
-            -d '{
-              "packId": 9024760,
-              "runNow": true,
-              "environmentId": 8890901,
-              "buildId": 8902051,
-              "iteration": 1,
-              "headlessExecution": false,
-              "webAutId": 9049052
-            }')
+          $token = "${{ steps.auth.outputs.wm_token }}"
 
-          echo "$RESPONSE"
+          $payload = @{
+            packId = [int]$env:PACK_ID
+            runNow = $true
+            environmentId = [int]$env:ENVIRONMENT_ID
+            buildId = [int]$env:BUILD_ID
+            iteration = 1
+            headlessExecution = $false
+            webAutId = [int]$env:WEB_AUT_ID
+          } | ConvertTo-Json
 
-          RUN_ID=$(echo "$RESPONSE" | jq -r '.id')
+          $response = Invoke-RestMethod `
+            -Method PUT `
+            -Uri $env:EXECUTE_API_URL `
+            -Headers @{
+              Authorization = "Bearer $token"
+            } `
+            -ContentType "application/json" `
+            -Body $payload
 
-          echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
+          Write-Host "RUN ID: $($response.id)"
+
+          echo "run_id=$($response.id)" >> $env:GITHUB_OUTPUT
 
       - name: Monitor Execution
+        shell: pwsh
         run: |
 
-          RUN_ID=${{ steps.execute.outputs.run_id }}
+          $token = "${{ steps.auth.outputs.wm_token }}"
+          $runId = "${{ steps.execute.outputs.run_id }}"
 
-          while true
-          do
+          do {
 
-            RESPONSE=$(curl -s -X GET "$STATUS_API_URL/$RUN_ID" \
-              -H "Authorization: Bearer ${{ steps.auth.outputs.wm_token }}")
+            Start-Sleep -Seconds 10
 
-            STATE=$(echo "$RESPONSE" | jq -r '.state')
-            STATUS=$(echo "$RESPONSE" | jq -r '.status')
+            $result = Invoke-RestMethod `
+              -Method GET `
+              -Uri "$($env:STATUS_API_URL)/$runId" `
+              -Headers @{
+                Authorization = "Bearer $token"
+              }
 
-            echo "STATE=$STATE"
-            echo "STATUS=$STATUS"
+            Write-Host "STATE: $($result.state)"
+            Write-Host "STATUS: $($result.status)"
 
-            if [ "$STATE" = "COMPLETED" ]; then
+          } while ($result.state -ne "COMPLETED")
 
-              if [ "$STATUS" = "FAIL" ]; then
-                exit 1
-              fi
+          if ($result.status -eq "FAIL") {
+            throw "Watermelon execution failed"
+          }
 
-              exit 0
-            fi
-
-            sleep $POLL_INTERVAL
-
-          done
+          Write-Host "Watermelon execution completed successfully"
